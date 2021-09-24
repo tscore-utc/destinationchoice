@@ -1,0 +1,90 @@
+---
+title: "SF ridehail shift start location"
+author: "Greg Macfarlane"
+date: "9/24/2021"
+output: html_document
+---
+
+We'll do this again, using the mlogit package for R.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(mlogit)
+library(modelsummary)
+```
+
+I got some data from Yufei
+```{r loadata}
+(d <- read_csv("data/estimation_data.zip"))
+```
+
+In a “long” dataset, there should be an ID column that identifies the choice
+maker, and alternative column that identifies which options they have, and a
+chosen column that identifies which alternative they chose.
+
+```{r stats}
+# number of choice makers
+length(unique(d$ID))
+
+d %>% group_by(ID) %>% 
+  summarise(
+    n = n(), # number of rows per person
+    chosen = sum(chosen), # number of choices per person
+    n_alts = length(unique(TAZ))
+  )
+```
+
+
+This dataset is not well-specified. How is it possible for an individual
+driver to have chosen four different starting locations? Is it because they have 
+multiple shifts? Which variable identifies the shift number?
+
+Let's take a guess that the `start` column could help us out.
+```{r better-id}
+d %>% group_by(ID, start) %>% 
+  summarise(
+    n = n(), # number of rows per person
+    chosen = sum(chosen), # number of choices per person
+    n_alts = length(unique(TAZ))
+  )
+```
+
+Okay, now we are cooking. There is still a problem where some agents apparently have 
+repeated alternatives. That's got to change; is there a compelling reason why 30 alternatives
+is better than 10? 
+
+Oh well, let's move forward. We'll remove the duplicate rows and make sure we keep
+the choice.
+
+```{r idx}
+idx <- d %>% 
+  filter(ID < 10) %>%
+  mutate(ID = str_c(ID, start, sep = "-")) %>% 
+  
+  # keep only one row from the ID-TAZ pair, but make sure it's the chosen row
+  group_by(ID, TAZ) %>%
+  arrange(-chosen, .by_group = TRUE) %>%
+  slice(1)  %>%
+  
+  dfidx(idx = c("ID", "TAZ"))
+  
+```
+
+With that cleaning done, estimating a destination choice model is straightforward.
+One thing to note is that you cannot have any alternative-specific coefficients 
+(including the intercept). So we add a `-1` to the ASC specification.
+
+```{r models}
+mymodels <- list(
+  "Base" = mlogit(chosen ~ POP + EMP | -1, data = idx),
+  "Land Use" = mlogit(chosen ~ TOTALPARK + SFDU + MFDU | -1, data = idx),
+  "Both" = mlogit(chosen ~ POP + EMP + TOTALPARK + SFDU + MFDU | -1, data = idx)
+)
+```
+
+```{r results}
+modelsummary(mymodels, estimate  = "{estimate} {stars}", statistic = "({statistic})",
+             notes = "t-statistic in parentheses", fmt = "%.4f")
+```
+
